@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#0a0d0c">
+<meta name="description" content="A browser-based air mouse demo powered by MediaPipe hand tracking. Move, click, drag and draw with hand gestures.">
+<title>AIRMOUSE // gesture control</title>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+<style>
+  :root{
+    --bg:#0a0d0c;
+    --panel:#101513;
+    --panel-2:#0d1211;
+    --line:#1f2b27;
+    --teal:#6bf0c9;
+    --teal-dim:#2c6b57;
+    --amber:#ffb454;
+    --ink:#d7e5df;
+    --ink-dim:#7d938c;
+    --mono: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif;
+  }
+  *{box-sizing:border-box;}
+  html,body{
+    margin:0; padding:0; width:100%; height:100%;
+    background:var(--bg); color:var(--ink);
+    font-family:var(--sans);
+    overflow:hidden;
+  }
+  body{
+    background-image:
+      radial-gradient(circle at 15% 10%, rgba(107,240,201,0.06), transparent 40%),
+      radial-gradient(circle at 85% 90%, rgba(107,240,201,0.04), transparent 45%);
+  }
+
+  .scanlines{
+    position:fixed; inset:0; pointer-events:none; z-index:50;
+    background:repeating-linear-gradient(
+      to bottom, rgba(0,0,0,0) 0px, rgba(0,0,0,0) 2px,
+      rgba(0,0,0,0.06) 3px, rgba(0,0,0,0) 4px
+    );
+    opacity:.5;
+  }
+
+  .app{
+    display:flex; flex-direction:column;
+    width:100%; height:100vh; min-height:560px;
+  }
+
+  header{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:14px 22px;
+    border-bottom:1px solid var(--line);
+    background:linear-gradient(180deg, rgba(107,240,201,0.03), transparent);
+    flex-shrink:0;
+  }
+  .brand{
+    display:flex; align-items:baseline; gap:10px;
+  }
+  .brand .mark{
+    font-family:var(--mono); font-size:11px; letter-spacing:0.25em;
+    color:var(--teal-dim); border:1px solid var(--teal-dim);
+    padding:3px 7px; border-radius:3px;
+  }
+  .brand h1{
+    margin:0; font-size:17px; letter-spacing:0.06em; font-weight:600;
+    color:var(--ink);
+  }
+  .brand h1 span{ color:var(--teal); }
+
+  #status{
+    font-family:var(--mono); font-size:11px; letter-spacing:0.08em;
+    color:var(--ink-dim); display:flex; align-items:center; gap:8px;
+  }
+  #status .dot{
+    width:7px; height:7px; border-radius:50%;
+    background:#555; box-shadow:0 0 0 rgba(0,0,0,0);
+    transition:background .2s, box-shadow .2s;
+  }
+  #status.tracking .dot{ background:var(--teal); box-shadow:0 0 8px 1px var(--teal);}
+  #status.pinch .dot{ background:var(--amber); box-shadow:0 0 10px 2px var(--amber);}
+  #status.error .dot{ background:#e0645a; box-shadow:0 0 8px 1px #e0645a;}
+
+  main{
+    flex:1; display:flex; min-height:0;
+  }
+
+  /* LEFT: camera / tracking panel */
+  .cam-panel{
+    width:clamp(260px, 22vw, 340px); flex-shrink:0; min-width:250px;
+    border-right:1px solid var(--line);
+    display:flex; flex-direction:column;
+    background:var(--panel-2);
+  }
+  .cam-frame{
+    position:relative; width:100%; aspect-ratio: 4/3;
+    background:#000;
+    border-bottom:1px solid var(--line);
+    overflow:hidden;
+  }
+  .cam-frame video{
+    position:absolute; inset:0; width:100%; height:100%;
+    object-fit:cover;
+    transform:scaleX(-1);
+    opacity:0.85;
+  }
+  .cam-frame canvas{
+    position:absolute; inset:0; width:100%; height:100%;
+  }
+  .cam-frame .corner{
+    position:absolute; width:16px; height:16px;
+    border-color:var(--teal-dim); z-index:5; opacity:.8;
+  }
+  .cam-frame .corner.tl{ top:8px; left:8px; border-top:2px solid; border-left:2px solid;}
+  .cam-frame .corner.tr{ top:8px; right:8px; border-top:2px solid; border-right:2px solid;}
+  .cam-frame .corner.bl{ bottom:8px; left:8px; border-bottom:2px solid; border-left:2px solid;}
+  .cam-frame .corner.br{ bottom:8px; right:8px; border-bottom:2px solid; border-right:2px solid;}
+
+  .overlay-msg{
+    position:absolute; inset:0; z-index:10;
+    display:flex; align-items:center; justify-content:center;
+    text-align:center; padding:20px;
+    background:rgba(6,8,7,0.9);
+    font-family:var(--mono); font-size:12px; color:var(--ink-dim);
+    line-height:1.6;
+  }
+  .overlay-msg button{
+    margin-top:10px;
+    font-family:var(--mono); font-size:11px; letter-spacing:.05em;
+    background:transparent; border:1px solid var(--teal-dim); color:var(--teal);
+    padding:7px 14px; border-radius:3px; cursor:pointer;
+  }
+  .overlay-msg button:hover{ background:rgba(107,240,201,0.08); }
+
+  .readout{
+    padding:14px 16px; font-family:var(--mono); font-size:11px;
+    color:var(--ink-dim); display:flex; flex-direction:column; gap:7px;
+  }
+  .readout .row{ display:flex; justify-content:space-between; }
+  .readout .row b{ color:var(--teal); font-weight:500; }
+  .readout .label{ letter-spacing:.08em; }
+
+  .hint{
+    margin-top:auto; padding:14px 16px; border-top:1px solid var(--line);
+    font-size:11.5px; color:var(--ink-dim); line-height:1.6;
+  }
+  .hint b{ color:var(--ink); }
+
+  /* RIGHT: desktop playground */
+  .desk-wrap{
+    flex:1; position:relative; overflow:hidden;
+    background:
+      linear-gradient(var(--line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--line) 1px, transparent 1px);
+    background-size:34px 34px;
+    background-color:var(--panel);
+  }
+  .desk-wrap::before{
+    content:''; position:absolute; inset:0;
+    background:radial-gradient(circle at 50% 40%, rgba(0,0,0,0), rgba(0,0,0,0.5) 90%);
+    pointer-events:none;
+  }
+
+  #desk{
+    position:absolute; inset:0;
+  }
+
+  .icon{
+    position:absolute;
+    width:88px; display:flex; flex-direction:column; align-items:center; gap:8px;
+    font-family:var(--mono); font-size:10.5px; letter-spacing:.04em;
+    color:var(--ink-dim); user-select:none;
+    padding:8px 4px; border-radius:6px;
+    transition:background .12s;
+  }
+  .icon .glyph{
+    width:46px; height:46px; border-radius:10px;
+    border:1px solid var(--line); background:var(--panel-2);
+    display:flex; align-items:center; justify-content:center;
+    font-size:20px; color:var(--teal);
+    transition:border-color .12s, box-shadow .12s, transform .08s;
+  }
+  .icon.hovered .glyph{ border-color:var(--teal); box-shadow:0 0 12px rgba(107,240,201,0.25); }
+  .icon.pressed .glyph{ transform:scale(0.9); }
+
+  .win{
+    position:absolute;
+    background:var(--panel-2);
+    border:1px solid var(--line);
+    border-radius:8px;
+    box-shadow:0 20px 50px rgba(0,0,0,0.5);
+    display:flex; flex-direction:column;
+    overflow:hidden;
+  }
+  .win .titlebar{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:8px 12px;
+    background:linear-gradient(180deg, rgba(107,240,201,0.06), transparent);
+    border-bottom:1px solid var(--line);
+    font-family:var(--mono); font-size:10.5px; letter-spacing:.06em;
+    color:var(--ink-dim); cursor:default;
+  }
+  .win .titlebar.hovered{ background:rgba(107,240,201,0.12); color:var(--teal); }
+  .win .titlebar .x{
+    width:16px; height:16px; border-radius:50%;
+    border:1px solid var(--line); display:flex; align-items:center; justify-content:center;
+    font-size:9px; color:var(--ink-dim);
+  }
+  .win .titlebar .x.hovered{ background:#e0645a; border-color:#e0645a; color:#1a0806; }
+  .win-body{ flex:1; position:relative; }
+
+  #counterWin .win-body{
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap:10px; padding:16px;
+  }
+  #counterVal{ font-family:var(--mono); font-size:34px; color:var(--teal); }
+  .btn{
+    font-family:var(--mono); font-size:11px; letter-spacing:.06em;
+    background:transparent; border:1px solid var(--teal-dim); color:var(--teal);
+    padding:9px 16px; border-radius:5px; cursor:default;
+    transition:background .1s, border-color .1s;
+  }
+  .btn.hovered{ border-color:var(--teal); background:rgba(107,240,201,0.08); }
+  .btn.pressed{ background:rgba(107,240,201,0.22); }
+
+  #paintWin canvas{ width:100%; height:100%; display:block; cursor:none; }
+  .paint-tools{
+    display:flex; gap:6px; padding:8px; border-top:1px solid var(--line);
+  }
+  .swatch{
+    width:20px; height:20px; border-radius:50%; border:2px solid transparent;
+  }
+  .swatch.hovered{ border-color:var(--ink); transform:scale(1.15); }
+  .swatch.clear{
+    width:auto; height:auto; border-radius:5px; padding:4px 10px;
+    font-family:var(--mono); font-size:9.5px; color:var(--ink-dim);
+    border:1px solid var(--line); background:transparent;
+  }
+  .swatch.clear.hovered{ border-color:var(--amber); color:var(--amber); }
+
+  /* virtual cursor */
+  #cursor{
+    position:fixed; top:0; left:0; z-index:100;
+    width:26px; height:26px; margin:-13px 0 0 -13px;
+    pointer-events:none;
+    border-radius:50%;
+    border:1.5px solid var(--teal);
+    box-shadow:0 0 14px rgba(107,240,201,0.5);
+    transition:transform .06s, border-color .08s, background .08s;
+    display:none;
+  }
+  #cursor::after{
+    content:''; position:absolute; top:50%; left:50%;
+    width:3px; height:3px; margin:-1.5px 0 0 -1.5px;
+    border-radius:50%; background:var(--teal);
+  }
+  #cursor.pinching{
+    transform:scale(0.55);
+    border-color:var(--amber);
+    background:rgba(255,180,84,0.15);
+    box-shadow:0 0 18px rgba(255,180,84,0.6);
+  }
+  #cursor.pinching::after{ background:var(--amber); }
+
+  .controls{padding:0 16px 14px;display:flex;flex-direction:column;gap:9px;font-family:var(--mono);font-size:10px;color:var(--ink-dim)}
+  .controls-heading{font-size:9px;letter-spacing:.14em;color:var(--teal-dim);margin-bottom:2px}
+  .control-label{display:flex;justify-content:space-between;align-items:center}
+  .control-label output{color:var(--teal)}
+  #smoothRange{width:100%;accent-color:var(--teal);cursor:pointer}
+  .control-actions{display:flex;gap:7px}
+  .control-btn{flex:1;min-width:0;padding:7px 6px;border:1px solid var(--line);border-radius:4px;background:transparent;color:var(--ink-dim);font:inherit;cursor:pointer}
+  .control-btn:hover,.control-btn:focus-visible{border-color:var(--teal-dim);color:var(--teal);outline:none}
+  .control-note{font-size:9px;opacity:.8}
+  button:focus-visible,input:focus-visible{outline:1px solid var(--teal);outline-offset:3px}
+  @media (max-width: 760px){
+    html,body{height:auto;min-height:100%;overflow:auto}
+    .app{height:auto;min-height:100svh}
+    header{padding:12px 14px}
+    main{flex-direction:column;min-height:0}
+    .cam-panel{width:100%;min-width:0;border-right:0;border-bottom:1px solid var(--line)}
+    .cam-frame{aspect-ratio:16/9;max-height:34svh}
+    .readout{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;padding:10px 14px}
+    .readout .row{gap:5px;flex-direction:column}
+    .controls{padding:0 14px 12px}
+    .hint{margin-top:0;padding:10px 14px}
+    .desk-wrap{flex:none;min-height:650px}
+    #dragWin{left:12px!important;top:14px!important;width:min(280px,calc(50% - 18px))!important;height:190px!important}
+    #counterWin{left:auto!important;right:12px!important;top:14px!important;width:min(240px,calc(50% - 18px))!important;height:190px!important}
+    #paintWin{left:12px!important;top:230px!important;width:calc(100% - 24px)!important;height:370px!important}
+    .scanlines{position:absolute}
+  }
+  @media (prefers-reduced-motion: reduce){*,*::before,*::after{scroll-behavior:auto!important;transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<!-- AIRMOUSE: browser-based hand gesture playground. See README.md for setup. -->
+
+<div class="scanlines"></div>
+
+<div class="app">
+  <header>
+    <div class="brand">
+      <span class="mark">HANDS-ON</span>
+      <h1>AIR<span>MOUSE</span></h1>
+    </div>
+    <div id="status"><span class="dot"></span><span id="statusText">initializing</span></div>
+  </header>
+
+  <main>
+    <div class="cam-panel">
+      <div class="cam-frame" id="camFrame">
+        <video id="video" playsinline autoplay muted></video>
+        <canvas id="overlay"></canvas>
+        <div class="corner tl"></div><div class="corner tr"></div>
+        <div class="corner bl"></div><div class="corner br"></div>
+        <div class="overlay-msg" id="startMsg">
+          LOADING TRACKING MODEL<br>hold on a sec...
+        </div>
+      </div>
+      <div class="readout">
+        <div class="row"><span class="label">hand</span><b id="rHand">—</b></div>
+        <div class="row"><span class="label">x, y</span><b id="rXY">—</b></div>
+        <div class="row"><span class="label">2-finger gap</span><b id="rPinch">—</b></div>
+      </div>
+      <div class="controls">
+        <div class="controls-heading">TRACKING CONTROLS</div>
+        <label class="control-label" for="smoothRange"><span>cursor smoothing</span><output id="smoothValue">0.35</output></label>
+        <input id="smoothRange" type="range" min="0.15" max="0.75" step="0.05" value="0.35">
+        <div class="control-actions">
+          <button class="control-btn" id="cameraBtn" type="button" aria-pressed="false">camera on</button>
+          <button class="control-btn" id="pauseBtn" type="button">pause tracking</button>
+          <button class="control-btn" id="resetBtn" type="button">reset layout</button>
+        </div>
+        <div class="control-note">Index finger moves. Touch index + middle fingertips to click, drag or draw. Open palm pauses/resumes.</div>
+      </div>
+      <div class="hint">
+        Point your <b>index finger</b> to move. Touch your <b>index + middle fingertips</b> to click, drag windows or draw. Keep your hand ~30–60cm from the camera in decent light.
+      </div>
+    </div>
+
+    <div class="desk-wrap">
+      <div id="desk">
+        <!-- draggable window -->
+        <div class="win" id="dragWin" style="left:60px; top:40px; width:280px; height:190px;">
+          <div class="titlebar drag-handle" data-win="dragWin"><span>WINDOW_01 · drag me</span><span class="x">×</span></div>
+          <div class="win-body" style="display:flex;align-items:center;justify-content:center;color:var(--ink-dim);font-family:var(--mono);font-size:11px;text-align:center;padding:10px;">
+            pinch the titlebar<br>and move your hand
+          </div>
+        </div>
+
+        <!-- counter window -->
+        <div class="win" id="counterWin" style="left:380px; top:40px; width:240px; height:190px;">
+          <div class="titlebar drag-handle" data-win="counterWin"><span>COUNTER</span><span class="x">×</span></div>
+          <div class="win-body">
+            <div id="counterVal">0</div>
+            <button class="btn clickable" id="incBtn">PINCH TO +1</button>
+          </div>
+        </div>
+
+        <!-- paint window -->
+        <div class="win" id="paintWin" style="left:60px; top:270px; width:560px; height:370px;">
+          <div class="titlebar drag-handle" data-win="paintWin"><span>SCRATCHPAD · pinch + move to draw</span><span class="x">×</span></div>
+          <div class="win-body">
+            <canvas id="paintCanvas"></canvas>
+          </div>
+          <div class="paint-tools">
+            <div class="swatch clickable" data-color="#6bf0c9" style="background:#6bf0c9"></div>
+            <div class="swatch clickable" data-color="#ffb454" style="background:#ffb454"></div>
+            <div class="swatch clickable" data-color="#e0645a" style="background:#e0645a"></div>
+            <div class="swatch clickable" data-color="#d7e5df" style="background:#d7e5df"></div>
+            <div class="swatch clear clickable" id="clearPaint">clear</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<div id="cursor"></div>
+
+<script>
+(function(){
+  const video = document.getElementById('video');
+  const overlay = document.getElementById('overlay');
+  const octx = overlay.getContext('2d');
+  const startMsg = document.getElementById('startMsg');
+  const statusEl = document.getElementById('status');
+  const statusText = document.getElementById('statusText');
+  const cursorEl = document.getElementById('cursor');
+  const deskWrap = document.querySelector('.desk-wrap');
+  const rHand = document.getElementById('rHand');
+  const rXY = document.getElementById('rXY');
+  const rPinch = document.getElementById('rPinch');
+  const smoothRange = document.getElementById('smoothRange');
+  const smoothValue = document.getElementById('smoothValue');
+  const pauseBtn = document.getElementById('pauseBtn');
+  const resetBtn = document.getElementById('resetBtn');
+  const cameraBtn = document.getElementById('cameraBtn');
+
+  const HAND_CONNECTIONS = [
+    [0,1],[1,2],[2,3],[3,4],
+    [0,5],[5,6],[6,7],[7,8],
+    [5,9],[9,10],[10,11],[11,12],
+    [9,13],[13,14],[14,15],[15,16],
+    [13,17],[17,18],[18,19],[19,20],
+    [0,17]
+  ];
+
+  function setStatus(mode, text){
+    statusEl.className = mode;
+    statusText.textContent = text;
+  }
+
+  // ---------- cursor state / interaction ----------
+  let cursorX = window.innerWidth/2, cursorY = window.innerHeight/2;
+  let smoothX = cursorX, smoothY = cursorY;
+  let isPinching = false, wasPinching = false;
+  let draggingWin = null, dragOffsetX = 0, dragOffsetY = 0;
+  let paintTarget = null, paintColor = '#6bf0c9';
+  let lastPaintX = null, lastPaintY = null;
+  let counter = 0;
+  let smoothing = Number(smoothRange.value);
+  let paused = false;
+  let pinchRatio = 1;
+  let pinchCandidate = false;
+  let pinchFrames = 0;
+  let palmFrames = 0;
+  let palmLatched = false;
+  let hands = null;
+  let stream = null;
+  let cameraEnabled = false;
+  let frameHandle = null;
+  let cameraStarting = false;
+
+  function setPaused(value){
+    paused = Boolean(value);
+    pauseBtn.textContent = paused ? 'resume tracking' : 'pause tracking';
+    if (paused){ isPinching = false; pinchCandidate = false; pinchFrames = 0; onPinchEnd(); cursorEl.style.display = 'none'; setStatus('', 'paused'); }
+    else if (cameraEnabled){ cursorEl.style.display = 'block'; setStatus('tracking', 'tracking'); }
+  }
+
+  function resetLayout(){
+    const defaults = {
+      dragWin: {left:60, top:40, width:280, height:190},
+      counterWin: {left:380, top:40, width:240, height:190},
+      paintWin: {left:60, top:270, width:560, height:370}
+    };
+    Object.entries(defaults).forEach(([id, box]) => {
+      const el = document.getElementById(id);
+      Object.assign(el.style, {display:'flex', left:box.left+'px', top:box.top+'px', width:box.width+'px', height:box.height+'px', zIndex:''});
+    });
+    sizeCanvas();
+  }
+  pauseBtn.addEventListener('click', () => setPaused(!paused));
+  resetBtn.addEventListener('click', resetLayout);
+  smoothRange.addEventListener('input', () => { smoothing = Number(smoothRange.value); smoothValue.textContent = smoothing.toFixed(2); });
+  document.addEventListener('keydown', event => {
+    if (event.code === 'Space' && !['INPUT','TEXTAREA','BUTTON'].includes(document.activeElement.tagName)) { event.preventDefault(); setPaused(!paused); }
+  });
+
+  function clearHoverStates(){
+    document.querySelectorAll('.hovered').forEach(el => el.classList.remove('hovered'));
+  }
+
+  function updateCursorVisual(){
+    cursorEl.style.transform = `translate(${smoothX}px, ${smoothY}px)`;
+    cursorEl.classList.toggle('pinching', isPinching);
+  }
+
+  function frameLoop(){
+    // smooth cursor motion
+    smoothX += (cursorX - smoothX) * smoothing;
+    smoothY += (cursorY - smoothY) * smoothing;
+    updateCursorVisual();
+
+    clearHoverStates();
+    const el = document.elementFromPoint(smoothX, smoothY);
+
+    if (el && !paused){
+      const icon = el.closest('.icon');
+      const clickable = el.closest('.clickable');
+      const handle = el.closest('.drag-handle');
+      if (icon) icon.classList.add('hovered');
+      if (clickable) clickable.classList.add('hovered');
+      if (handle) handle.classList.add('hovered');
+    }
+
+    // pinch edge detection
+    if (!paused && isPinching && !wasPinching){
+      onPinchStart(el);
+    } else if ((!isPinching || paused) && wasPinching){
+      onPinchEnd();
+    } else if (!paused && isPinching && draggingWin){
+      moveDragWin();
+    } else if (!paused && isPinching && paintTarget){
+      paintStroke();
+    }
+    wasPinching = isPinching;
+
+    requestAnimationFrame(frameLoop);
+  }
+  requestAnimationFrame(frameLoop);
+
+  function onPinchStart(el){
+    if (!el) return;
+    const handle = el.closest('.drag-handle');
+    const canvasHit = el.id === 'paintCanvas';
+    const clickable = el.closest('.clickable');
+
+    if (handle){
+      const winId = handle.dataset.win;
+      const win = document.getElementById(winId);
+      const rect = win.getBoundingClientRect();
+      draggingWin = win;
+      dragOffsetX = smoothX - rect.left;
+      dragOffsetY = smoothY - rect.top;
+      win.style.zIndex = 10;
+      return;
+    }
+    if (canvasHit){
+      paintTarget = el;
+      lastPaintX = smoothX; lastPaintY = smoothY;
+      return;
+    }
+    if (clickable){
+      pressEl(clickable);
+      handleClick(clickable);
+    }
+  }
+
+  function onPinchEnd(){
+    draggingWin = null;
+    paintTarget = null;
+    lastPaintX = null; lastPaintY = null;
+  }
+
+  function pressEl(el){
+    el.classList.add('pressed');
+    setTimeout(()=>el.classList.remove('pressed'), 140);
+  }
+
+  function handleClick(el){
+    if (el.id === 'incBtn'){
+      counter++;
+      document.getElementById('counterVal').textContent = counter;
+    }
+    if (el.classList.contains('swatch') && el.dataset.color){
+      paintColor = el.dataset.color;
+    }
+    if (el.id === 'clearPaint'){
+      const c = document.getElementById('paintCanvas');
+      const ctx = c.getContext('2d');
+      ctx.clearRect(0,0,c.width,c.height);
+    }
+    if (el.closest('.x')){
+      const win = el.closest('.win');
+      if (win) win.style.display = 'none';
+    }
+  }
+
+  function moveDragWin(){
+    if (!draggingWin) return;
+    const parentRect = deskWrap.getBoundingClientRect();
+    let left = smoothX - dragOffsetX - parentRect.left;
+    let top = smoothY - dragOffsetY - parentRect.top;
+    left = Math.max(0, Math.min(left, parentRect.width - draggingWin.offsetWidth));
+    top = Math.max(0, Math.min(top, parentRect.height - draggingWin.offsetHeight));
+    draggingWin.style.left = left + 'px';
+    draggingWin.style.top = top + 'px';
+  }
+
+  function paintStroke(){
+    if (!paintTarget) return;
+    const rect = paintTarget.getBoundingClientRect();
+    if (smoothX < rect.left || smoothX > rect.right || smoothY < rect.top || smoothY > rect.bottom){
+      lastPaintX = smoothX; lastPaintY = smoothY;
+      return;
+    }
+    const ctx = paintTarget.getContext('2d');
+    const scaleX = paintTarget.width / rect.width;
+    const scaleY = paintTarget.height / rect.height;
+    const x = (smoothX - rect.left) * scaleX;
+    const y = (smoothY - rect.top) * scaleY;
+    if (lastPaintX !== null){
+      const lx = (lastPaintX - rect.left) * scaleX;
+      const ly = (lastPaintY - rect.top) * scaleY;
+      ctx.strokeStyle = paintColor;
+      ctx.lineWidth = 4;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(lx, ly);
+      ctx.lineTo(x, y);
+      ctx.stroke();
+    }
+    lastPaintX = smoothX; lastPaintY = smoothY;
+  }
+
+  // resize paint canvas to its element's actual pixel size
+  function sizeCanvas(){
+    const c = document.getElementById('paintCanvas');
+    const rect = c.getBoundingClientRect();
+    c.width = rect.width; c.height = rect.height;
+  }
+  window.addEventListener('resize', sizeCanvas);
+
+  function dist(a, b){
+    const dx = a.x - b.x, dy = a.y - b.y;
+    return Math.sqrt(dx*dx + dy*dy);
+  }
+
+  // ---------- MediaPipe hand tracking ----------
+  function onResults(results){
+    overlay.width = overlay.clientWidth;
+    overlay.height = overlay.clientHeight;
+    octx.save();
+    octx.clearRect(0,0,overlay.width, overlay.height);
+
+    const hasHand = results.multiHandLandmarks && results.multiHandLandmarks.length > 0;
+
+    if (hasHand){
+      const lm = results.multiHandLandmarks[0];
+
+      // draw mirrored skeleton on the preview (video itself is CSS-mirrored,
+      // so we mirror landmark x to match visually)
+      octx.strokeStyle = 'rgba(107,240,201,0.55)';
+      octx.lineWidth = 1.5;
+      HAND_CONNECTIONS.forEach(([a,b])=>{
+        const pa = lm[a], pb = lm[b];
+        octx.beginPath();
+        octx.moveTo((1-pa.x)*overlay.width, pa.y*overlay.height);
+        octx.lineTo((1-pb.x)*overlay.width, pb.y*overlay.height);
+        octx.stroke();
+      });
+      lm.forEach((p,i)=>{
+        octx.beginPath();
+        octx.arc((1-p.x)*overlay.width, p.y*overlay.height, i===8?4:2, 0, Math.PI*2);
+        octx.fillStyle = i===8 ? '#ffb454' : '#6bf0c9';
+        octx.fill();
+      });
+
+      const handSize = dist(lm[0], lm[9]) || 0.001;
+      // A steady open palm toggles pause/resume once, rather than firing every frame.
+      const openPalm = [8,12,16,20].every((tip, i) => lm[tip].y < lm[[6,10,14,18][i]].y);
+      palmFrames = openPalm ? Math.min(palmFrames + 1, 8) : 0;
+      if (palmFrames >= 8 && !palmLatched){ setPaused(!paused); palmLatched = true; }
+      if (!openPalm) palmLatched = false;
+      // Two-finger gesture: index fingertip (8) + middle fingertip (12).
+      // Normalize by palm size so the gesture works at different camera distances.
+      const gestureDist = dist(lm[8], lm[12]);
+      pinchRatio = gestureDist / handSize;
+      // Hysteresis: close below 0.30, release above 0.43 to avoid jitter.
+      if (pinchRatio < 0.30){ pinchCandidate = true; pinchFrames = Math.min(pinchFrames + 1, 3); }
+      else if (pinchRatio > 0.43){ pinchCandidate = false; pinchFrames = 0; }
+      isPinching = !paused && pinchCandidate && pinchFrames >= 2;
+
+      // map index fingertip -> desktop pane coordinates
+      const mx = 1 - lm[8].x; // mirror
+      const my = lm[8].y;
+      const margin = 0.12;
+      const nx = Math.min(1, Math.max(0, (mx - margin) / (1 - 2*margin)));
+      const ny = Math.min(1, Math.max(0, (my - margin) / (1 - 2*margin)));
+      const rect = deskWrap.getBoundingClientRect();
+      cursorX = rect.left + nx * rect.width;
+      cursorY = rect.top + ny * rect.height;
+
+      cursorEl.style.display = paused ? 'none' : 'block';
+      if (!paused) setStatus(isPinching ? 'pinch' : 'tracking', isPinching ? 'pinch' : 'tracking');
+      rHand.textContent = 'detected';
+      rXY.textContent = nx.toFixed(2) + ', ' + ny.toFixed(2);
+      rPinch.textContent = pinchRatio.toFixed(2) + (isPinching ? '  (closed)' : '  (open)');
+    } else {
+      isPinching = false;
+      pinchCandidate = false; pinchFrames = 0;
+      cursorEl.style.display = 'none';
+      setStatus('', paused ? 'paused' : 'no hand');
+      rHand.textContent = '—';
+      rXY.textContent = '—';
+      rPinch.textContent = '—';
+    }
+
+    octx.restore();
+  }
+
+  async function ensureHands(){
+    if (hands) return;
+    if (typeof Hands === 'undefined') throw new Error('MediaPipe failed to load. Check your internet connection.');
+    hands = new Hands({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
+    hands.setOptions({ maxNumHands:1, modelComplexity:1, minDetectionConfidence:0.7, minTrackingConfidence:0.6 });
+    hands.onResults(onResults);
+  }
+
+  async function startCamera(){
+    if (cameraEnabled || cameraStarting) return;
+    cameraStarting = true;
+    cameraBtn.disabled = true;
+    cameraBtn.textContent = 'starting…';
+    sizeCanvas();
+    try{
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('Camera access requires HTTPS or localhost. Open this project through GitHub Pages or localhost.');
+      await ensureHands();
+      stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'user', width:{ideal:640}, height:{ideal:480}}, audio:false});
+      video.srcObject = stream;
+      await video.play();
+      cameraEnabled = true;
+      cameraBtn.textContent = 'camera off';
+      cameraBtn.setAttribute('aria-pressed','true');
+      startMsg.style.display = 'none';
+      setStatus('tracking', 'tracking');
+      const processFrame = async () => {
+        if (!cameraEnabled) return;
+        try { if (video.readyState >= 2) await hands.send({image:video}); }
+        catch (err) { console.error('Hand tracking frame failed:', err); }
+        if (cameraEnabled) frameHandle = requestAnimationFrame(processFrame);
+      };
+      frameHandle = requestAnimationFrame(processFrame);
+    } catch(err){
+      console.error(err);
+      if (stream) stream.getTracks().forEach(track => track.stop());
+      stream = null;
+      video.srcObject = null;
+      const message = err.name === 'NotAllowedError' ? 'Camera permission was denied. Allow camera access in your browser settings.' : (err.message || 'Could not start the camera.');
+      startMsg.textContent = message;
+      startMsg.style.display = 'flex';
+      setStatus('error','camera error');
+      cameraBtn.textContent = 'camera on';
+      cameraBtn.setAttribute('aria-pressed','false');
+    } finally {
+      cameraStarting = false;
+      cameraBtn.disabled = false;
+    }
+  }
+
+  function stopCamera(){
+    cameraEnabled = false;
+    if (frameHandle !== null) cancelAnimationFrame(frameHandle);
+    frameHandle = null;
+    if (stream) stream.getTracks().forEach(track => track.stop());
+    stream = null;
+    video.pause();
+    video.srcObject = null;
+    isPinching = false; pinchCandidate = false; pinchFrames = 0; palmFrames = 0; palmLatched = false;
+    onPinchEnd();
+    cursorEl.style.display = 'none';
+    clearHoverStates();
+    octx.clearRect(0,0,overlay.width,overlay.height);
+    rHand.textContent = '—'; rXY.textContent = '—'; rPinch.textContent = '—';
+    cameraBtn.textContent = 'camera on';
+    cameraBtn.setAttribute('aria-pressed','false');
+    startMsg.textContent = 'CAMERA OFF';
+    startMsg.style.display = 'flex';
+    setStatus('', 'camera off');
+  }
+
+  cameraBtn.addEventListener('click', () => cameraEnabled ? stopCamera() : startCamera());
+  startCamera();
+
+})();
+</script>
+</body>
+</html>
